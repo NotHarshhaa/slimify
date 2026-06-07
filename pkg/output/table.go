@@ -15,13 +15,10 @@ import (
 
 // Colors and styles used for terminal output.
 var (
-	titleStyle   = color.New(color.FgHiWhite, color.Bold)
 	headerStyle  = color.New(color.FgHiCyan, color.Bold)
 	successStyle = color.New(color.FgHiGreen)
 	warningStyle = color.New(color.FgHiYellow)
-	errorStyle   = color.New(color.FgHiRed)
 	dimStyle     = color.New(color.FgHiBlack)
-	accentStyle  = color.New(color.FgHiMagenta)
 	infoStyle    = color.New(color.FgHiBlue)
 )
 

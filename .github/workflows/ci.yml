@@ -42,6 +42,9 @@ jobs:
           cache: true
 
       - name: Run tests
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
         run: go test -v -race -coverprofile=coverage.out ./...
 
       - name: Upload coverage

@@ -4,10 +4,7 @@
 package analyzer
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 
@@ -104,7 +101,6 @@ func (a *ImageAnalyzer) analyze(imageRef string, img v1.Image) (*AuditReport, er
 	// Analyze each layer
 	allFiles := make(map[string]bool)
 	var layerInfos []LayerInfo
-	var allFileEntries []FileEntry
 
 	for i, layer := range layers {
 		instruction := "unknown"
@@ -125,7 +121,6 @@ func (a *ImageAnalyzer) analyze(imageRef string, img v1.Image) (*AuditReport, er
 		// Track all files for ecosystem detection
 		for _, f := range files {
 			allFiles[f.Path] = true
-			allFileEntries = append(allFileEntries, f)
 		}
 
 		// Sort files by size descending
@@ -211,13 +206,6 @@ func extractLayerFiles(layer v1.Layer) ([]FileEntry, error) {
 	defer rc.Close()
 
 	return readTarEntries(rc)
-}
-
-// hashReader computes a SHA-256 hash of the given reader content.
-func hashReader(r io.Reader) string {
-	h := sha256.New()
-	io.Copy(h, r)
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 // cleanInstruction cleans up a Docker history instruction for display.

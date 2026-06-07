@@ -45,7 +45,7 @@ func writeMultiStageRewrite(b *strings.Builder, df *Dockerfile, base string, opt
 	}
 
 	// Build stage
-	b.WriteString(fmt.Sprintf("# --- Build stage ---\n"))
+	b.WriteString("# --- Build stage ---\n")
 	b.WriteString(fmt.Sprintf("FROM %s AS builder\n\n", buildBase))
 	b.WriteString("WORKDIR /app\n\n")
 
@@ -69,7 +69,7 @@ func writeMultiStageRewrite(b *strings.Builder, df *Dockerfile, base string, opt
 	}
 
 	// Production stage
-	b.WriteString(fmt.Sprintf("\n# --- Production stage ---\n"))
+	b.WriteString("\n# --- Production stage ---\n")
 	b.WriteString(fmt.Sprintf("FROM %s AS production\n\n", base))
 	b.WriteString("WORKDIR /app\n\n")
 
