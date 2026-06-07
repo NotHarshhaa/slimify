@@ -1,0 +1,38 @@
+# ==================================================
+# .dockerignore — slimify project
+# ==================================================
+
+.git
+.github
+.gitignore
+.vscode
+.idea
+.editorconfig
+
+# Documentation
+*.md
+!README.md
+LICENSE
+docs/
+
+# Build artifacts
+dist/
+bin/
+*.exe
+
+# Test & coverage
+*_test.go
+testdata/
+coverage/
+.golangci.yml
+
+# Config files not needed in image
+.goreleaser.yml
+.goreleaser.yaml
+install.sh
+docker-compose*.yml
+Makefile
+
+# Environment
+.env
+.env.*

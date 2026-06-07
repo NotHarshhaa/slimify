@@ -1,0 +1,176 @@
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+
+	"github.com/NotHarshhaa/slimify/pkg/analyzer"
+	"github.com/NotHarshhaa/slimify/pkg/config"
+	"github.com/NotHarshhaa/slimify/pkg/dockerfile"
+	"github.com/NotHarshhaa/slimify/pkg/ignore"
+	"github.com/NotHarshhaa/slimify/pkg/output"
+)
+
+var (
+	fixDockerfile string
+	fixOutDir     string
+	fixWrite      bool
+	fixNoRewrite  bool
+	fixDryRun     bool
+)
+
+var fixCmd = &cobra.Command{
+	Use:   "fix <image>",
+	Short: "Generate .dockerignore, optimized Dockerfile, and config",
+	Long: `Generates a .dockerignore, an optimized multi-stage Dockerfile, and a
+slimify.yaml config file based on image analysis.
+
+Examples:
+  slimify fix myapp:latest --dockerfile ./Dockerfile --out ./slimify-out/
+  slimify fix myapp:latest --dockerfile ./Dockerfile --dry-run
+  slimify fix myapp:latest --no-rewrite  # only generate .dockerignore`,
+	Args: cobra.ExactArgs(1),
+	RunE: runFix,
+}
+
+func init() {
+	fixCmd.Flags().StringVar(&fixDockerfile, "dockerfile", "", "path to your existing Dockerfile (required for rewrite)")
+	fixCmd.Flags().StringVar(&fixOutDir, "out", ".", "output directory for generated files")
+	fixCmd.Flags().BoolVar(&fixWrite, "write", false, "write files in-place, overwriting existing ones")
+	fixCmd.Flags().BoolVar(&fixNoRewrite, "no-rewrite", false, "only generate .dockerignore, skip Dockerfile rewrite")
+	fixCmd.Flags().BoolVar(&fixDryRun, "dry-run", false, "print generated output to stdout, don't write files")
+
+	rootCmd.AddCommand(fixCmd)
+}
+
+func runFix(cmd *cobra.Command, args []string) error {
+	imageRef := args[0]
+
+	// Load config
+	cfg, err := config.Load(cfgFile)
+	if err != nil {
+		return fmt.Errorf("config error: %w", err)
+	}
+
+	// Audit the image first
+	a := analyzer.NewImageAnalyzer(cfg.Audit.TopFilesPerLayer, cfg.Audit.ThresholdMB)
+	report, err := a.AnalyzeImage(imageRef, false)
+	if err != nil {
+		return fmt.Errorf("audit failed: %w", err)
+	}
+
+	// Generate .dockerignore
+	gen := ignore.NewGenerator(cfg, report.Ecosystems)
+	ignoreContent := gen.Generate()
+
+	// Rewrite Dockerfile if requested
+	var dockerfileContent string
+	hasDockerfile := false
+	if !fixNoRewrite && fixDockerfile != "" {
+		df, err := dockerfile.Parse(fixDockerfile)
+		if err != nil {
+			return fmt.Errorf("failed to parse Dockerfile: %w", err)
+		}
+
+		opts := dockerfile.RewriteOptions{
+			BaseImage:  cfg.Fix.BaseImage,
+			MultiStage: cfg.Fix.MultiStage,
+			Ecosystems: report.Ecosystems,
+		}
+
+		dockerfileContent = dockerfile.Rewrite(df, opts)
+		hasDockerfile = true
+	}
+
+	// Generate slimify.yaml config
+	configContent := generateSlimifyConfig(cfg, report)
+
+	// Output
+	if fixDryRun {
+		// Print to stdout
+		fmt.Println("# === .dockerignore ===")
+		fmt.Println(ignoreContent)
+		if hasDockerfile {
+			fmt.Println("# === Dockerfile.slimified ===")
+			fmt.Println(dockerfileContent)
+		}
+		fmt.Println("# === slimify.yaml ===")
+		fmt.Println(configContent)
+		return nil
+	}
+
+	// Determine output directory
+	outDir := fixOutDir
+	if cfg.Fix.OutputDir != "" && fixOutDir == "." {
+		outDir = cfg.Fix.OutputDir
+	}
+
+	// Create output directory
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Write files
+	ignorePath := filepath.Join(outDir, ".dockerignore")
+	if fixWrite {
+		// Write in-place
+		ignorePath = ".dockerignore"
+	}
+	if err := os.WriteFile(ignorePath, []byte(ignoreContent), 0644); err != nil {
+		return fmt.Errorf("failed to write .dockerignore: %w", err)
+	}
+
+	if hasDockerfile {
+		dfPath := filepath.Join(outDir, "Dockerfile.slimified")
+		if fixWrite {
+			dfPath = fixDockerfile
+		}
+		if err := os.WriteFile(dfPath, []byte(dockerfileContent), 0644); err != nil {
+			return fmt.Errorf("failed to write Dockerfile: %w", err)
+		}
+	}
+
+	configPath := filepath.Join(outDir, "slimify.yaml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		return fmt.Errorf("failed to write slimify.yaml: %w", err)
+	}
+
+	if !jsonOutput && !quiet {
+		output.PrintFixSummary(outDir, 0, report.TotalSize, hasDockerfile)
+	}
+
+	return nil
+}
+
+// generateSlimifyConfig creates a slimify.yaml config from current settings.
+func generateSlimifyConfig(cfg *config.Config, report *analyzer.AuditReport) string {
+	out := map[string]interface{}{
+		"ignore": map[string]interface{}{
+			"whitelist": cfg.Ignore.Whitelist,
+			"blacklist": cfg.Ignore.Blacklist,
+		},
+		"audit": map[string]interface{}{
+			"threshold_mb":       cfg.Audit.ThresholdMB,
+			"top_files_per_layer": cfg.Audit.TopFilesPerLayer,
+		},
+		"fix": map[string]interface{}{
+			"multi_stage": cfg.Fix.MultiStage,
+			"output_dir":  cfg.Fix.OutputDir,
+		},
+	}
+
+	if cfg.Fix.BaseImage != "" {
+		out["fix"].(map[string]interface{})["base_image"] = cfg.Fix.BaseImage
+	}
+
+	data, err := yaml.Marshal(out)
+	if err != nil {
+		return "# failed to generate config\n"
+	}
+
+	return "# slimify.yaml — generated by slimify\n\n" + string(data)
+}

@@ -1,0 +1,90 @@
+# .goreleaser.yml — slimify release configuration
+# See https://goreleaser.com for details
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  - id: slimify
+    main: .
+    binary: slimify
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/NotHarshhaa/slimify/cmd.Version={{.Version}}
+      - -X github.com/NotHarshhaa/slimify/cmd.Commit={{.ShortCommit}}
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+brews:
+  - repository:
+      owner: NotHarshhaa
+      name: homebrew-tap
+    homepage: "https://github.com/NotHarshhaa/slimify"
+    description: "The Docker image auditor that actually tells you what to do"
+    license: "MIT"
+    install: |
+      bin.install "slimify"
+    test: |
+      system "#{bin}/slimify", "--version"
+
+dockers:
+  - image_templates:
+      - "ghcr.io/notharshhaa/slimify:{{ .Version }}"
+      - "ghcr.io/notharshhaa/slimify:latest"
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.title=slimify"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source=https://github.com/NotHarshhaa/slimify"
+      - "--label=org.opencontainers.image.licenses=MIT"
