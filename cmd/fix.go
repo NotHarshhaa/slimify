@@ -21,6 +21,7 @@ var (
 	fixWrite      bool
 	fixNoRewrite  bool
 	fixDryRun     bool
+	fixPlatform   string
 )
 
 var fixCmd = &cobra.Command{
@@ -32,7 +33,8 @@ slimify.yaml config file based on image analysis.
 Examples:
   slimify fix myapp:latest --dockerfile ./Dockerfile --out ./slimify-out/
   slimify fix myapp:latest --dockerfile ./Dockerfile --dry-run
-  slimify fix myapp:latest --no-rewrite  # only generate .dockerignore`,
+  slimify fix myapp:latest --no-rewrite  # only generate .dockerignore
+  slimify fix myapp:latest --dockerfile ./Dockerfile --platform linux/amd64`,
 	Args: cobra.ExactArgs(1),
 	RunE: runFix,
 }
@@ -43,12 +45,18 @@ func init() {
 	fixCmd.Flags().BoolVar(&fixWrite, "write", false, "write files in-place, overwriting existing ones")
 	fixCmd.Flags().BoolVar(&fixNoRewrite, "no-rewrite", false, "only generate .dockerignore, skip Dockerfile rewrite")
 	fixCmd.Flags().BoolVar(&fixDryRun, "dry-run", false, "print generated output to stdout, don't write files")
+	fixCmd.Flags().StringVar(&fixPlatform, "platform", "", "target platform for the rewritten FROM line (e.g. linux/amd64)")
 
 	rootCmd.AddCommand(fixCmd)
 }
 
 func runFix(cmd *cobra.Command, args []string) error {
 	imageRef := args[0]
+
+	// Warn when Dockerfile rewrite is expected but no path was given
+	if !fixNoRewrite && fixDockerfile == "" && !fixDryRun {
+		fmt.Fprintln(os.Stderr, "warning: --dockerfile not specified; skipping Dockerfile rewrite (use --no-rewrite to suppress this message)")
+	}
 
 	// Load config
 	cfg, err := config.Load(cfgFile)
@@ -80,6 +88,7 @@ func runFix(cmd *cobra.Command, args []string) error {
 			BaseImage:  cfg.Fix.BaseImage,
 			MultiStage: cfg.Fix.MultiStage,
 			Ecosystems: report.Ecosystems,
+			Platform:   fixPlatform,
 		}
 
 		dockerfileContent = dockerfile.Rewrite(df, opts)
@@ -140,7 +149,8 @@ func runFix(cmd *cobra.Command, args []string) error {
 	}
 
 	if !jsonOutput && !quiet {
-		output.PrintFixSummary(outDir, 0, report.TotalSize, hasDockerfile)
+		// Pass actual savings from report so the summary shows real numbers
+		output.PrintFixSummary(outDir, 0, report.TotalSize, hasDockerfile, report.SavingsMB)
 	}
 
 	return nil

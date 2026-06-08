@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,11 @@ import (
 var (
 	ignoreWrite     string
 	ignoreEcosystem string
+	ignoreDir       string
 )
+
+// maxScanDepth is the maximum directory depth for ecosystem detection.
+const maxScanDepth = 4
 
 var ignoreCmd = &cobra.Command{
 	Use:   "ignore",
@@ -32,14 +37,16 @@ Examples:
   slimify ignore
   slimify ignore > .dockerignore
   slimify ignore --write .dockerignore
-  slimify ignore --ecosystem go,node`,
+  slimify ignore --ecosystem go,node,php
+  slimify ignore --dir ./services/api`,
 	Args: cobra.NoArgs,
 	RunE: runIgnore,
 }
 
 func init() {
 	ignoreCmd.Flags().StringVar(&ignoreWrite, "write", "", "write directly to the given file path")
-	ignoreCmd.Flags().StringVar(&ignoreEcosystem, "ecosystem", "", "force specific ecosystems (comma-separated: go,node,python,rust,java,ruby)")
+	ignoreCmd.Flags().StringVar(&ignoreEcosystem, "ecosystem", "", "force specific ecosystems (comma-separated: go,node,python,rust,java,ruby,php,elixir,dotnet)")
+	ignoreCmd.Flags().StringVar(&ignoreDir, "dir", ".", "directory to scan for ecosystem detection (useful for monorepos)")
 
 	rootCmd.AddCommand(ignoreCmd)
 }
@@ -56,8 +63,22 @@ func runIgnore(cmd *cobra.Command, args []string) error {
 	if ignoreEcosystem != "" {
 		eco = ecosystem.DetectFromEcosystemFlag(ignoreEcosystem)
 	} else {
-		// Scan current directory for ecosystem markers
-		files, err := scanDirectory(".")
+		// Scan the target directory for ecosystem markers
+		scanDir := ignoreDir
+		if scanDir == "" {
+			scanDir = "."
+		}
+
+		// Resolve to absolute path for clarity
+		if abs, err := filepath.Abs(scanDir); err == nil {
+			scanDir = abs
+		}
+
+		if _, err := os.Stat(scanDir); err != nil {
+			return fmt.Errorf("scan directory %q not found: %w", scanDir, err)
+		}
+
+		files, err := scanDirectory(scanDir)
 		if err != nil {
 			files = []string{}
 		}
@@ -98,30 +119,34 @@ func runIgnore(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// scanDirectory walks a directory and returns all file paths.
+// scanDirectory walks a directory up to maxScanDepth levels and returns all file paths.
 func scanDirectory(dir string) ([]string, error) {
 	var files []string
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
+	baseDepth := strings.Count(filepath.ToSlash(dir), "/")
 
-	for _, entry := range entries {
-		path := filepath.Join(dir, entry.Name())
-		files = append(files, path)
-
-		// Also check one level deep for common project structures
-		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
-			subEntries, err := os.ReadDir(path)
-			if err != nil {
-				continue
-			}
-			for _, sub := range subEntries {
-				files = append(files, filepath.Join(path, sub.Name()))
-			}
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
 		}
-	}
 
-	return files, nil
+		// Skip hidden directories (other than the root itself)
+		if d.IsDir() && path != dir && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
+
+		// Enforce depth limit
+		currentDepth := strings.Count(filepath.ToSlash(path), "/")
+		if d.IsDir() && currentDepth-baseDepth >= maxScanDepth {
+			return filepath.SkipDir
+		}
+
+		if !d.IsDir() {
+			files = append(files, path)
+		}
+
+		return nil
+	})
+
+	return files, err
 }

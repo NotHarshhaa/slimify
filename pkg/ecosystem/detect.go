@@ -5,6 +5,7 @@ package ecosystem
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -18,6 +19,9 @@ const (
 	Rust   Type = "Rust"
 	Java   Type = "Java"
 	Ruby   Type = "Ruby"
+	PHP    Type = "PHP"
+	Elixir Type = "Elixir"
+	DotNet Type = ".NET"
 )
 
 // Marker maps a file or directory name to its ecosystem.
@@ -35,6 +39,8 @@ var AllMarkers = []Marker{
 	{Path: "yarn.lock", Ecosystem: NodeJS, Label: "yarn"},
 	{Path: "pnpm-lock.yaml", Ecosystem: NodeJS, Label: "pnpm"},
 	{Path: "bun.lockb", Ecosystem: NodeJS, Label: "bun"},
+	{Path: "bun.lock", Ecosystem: NodeJS, Label: "bun"},
+	{Path: "deno.lock", Ecosystem: NodeJS, Label: "deno"},
 
 	// Go
 	{Path: "go.mod", Ecosystem: Go, Label: "go modules"},
@@ -62,6 +68,22 @@ var AllMarkers = []Marker{
 	// Ruby
 	{Path: "Gemfile", Ecosystem: Ruby, Label: "bundler"},
 	{Path: "Gemfile.lock", Ecosystem: Ruby, Label: "bundler"},
+
+	// PHP
+	{Path: "composer.json", Ecosystem: PHP, Label: "composer"},
+	{Path: "composer.lock", Ecosystem: PHP, Label: "composer"},
+
+	// Elixir
+	{Path: "mix.exs", Ecosystem: Elixir, Label: "mix"},
+	{Path: "mix.lock", Ecosystem: Elixir, Label: "mix"},
+
+	// .NET
+	{Path: "*.csproj", Ecosystem: DotNet, Label: "dotnet"},
+	{Path: "*.fsproj", Ecosystem: DotNet, Label: "dotnet"},
+	{Path: "*.vbproj", Ecosystem: DotNet, Label: "dotnet"},
+	{Path: "global.json", Ecosystem: DotNet, Label: "dotnet"},
+	{Path: "Directory.Build.props", Ecosystem: DotNet, Label: "dotnet"},
+	{Path: "nuget.config", Ecosystem: DotNet, Label: "nuget"},
 }
 
 // DetectResult holds the detected ecosystems and their labels.
@@ -69,25 +91,37 @@ type DetectResult struct {
 	Ecosystems map[Type][]string // ecosystem -> labels (e.g., NodeJS -> ["npm", "yarn"])
 }
 
-// String returns a human-readable summary like "Node.js (npm), Python (pip)".
+// String returns a human-readable, deterministically ordered summary like
+// "Node.js (npm), Python (pip)".
 func (d *DetectResult) String() string {
 	if len(d.Ecosystems) == 0 {
 		return "none detected"
 	}
+
+	// Sort ecosystem names for stable output.
+	keys := make([]string, 0, len(d.Ecosystems))
+	for eco := range d.Ecosystems {
+		keys = append(keys, string(eco))
+	}
+	sort.Strings(keys)
+
 	var parts []string
-	for eco, labels := range d.Ecosystems {
-		unique := uniqueStrings(labels)
-		parts = append(parts, string(eco)+" ("+strings.Join(unique, ", ")+")")
+	for _, k := range keys {
+		labels := uniqueStrings(d.Ecosystems[Type(k)])
+		parts = append(parts, k+"("+strings.Join(labels, ", ")+")")
 	}
 	return strings.Join(parts, ", ")
 }
 
-// Types returns just the ecosystem types detected.
+// Types returns just the ecosystem types detected, sorted for stability.
 func (d *DetectResult) Types() []Type {
 	var types []Type
 	for t := range d.Ecosystems {
 		types = append(types, t)
 	}
+	sort.Slice(types, func(i, j int) bool {
+		return string(types[i]) < string(types[j])
+	})
 	return types
 }
 
@@ -104,7 +138,7 @@ func DetectFromFiles(files []string) *DetectResult {
 		Ecosystems: make(map[Type][]string),
 	}
 
-	// Build a set of basenames for fast lookup
+	// Build a set of basenames for fast lookup.
 	baseNames := make(map[string]bool)
 	for _, f := range files {
 		base := filepath.Base(f)
@@ -112,6 +146,20 @@ func DetectFromFiles(files []string) *DetectResult {
 	}
 
 	for _, marker := range AllMarkers {
+		// Glob markers (e.g. *.csproj)
+		if strings.Contains(marker.Path, "*") {
+			for base := range baseNames {
+				if matched, _ := filepath.Match(marker.Path, base); matched {
+					result.Ecosystems[marker.Ecosystem] = append(
+						result.Ecosystems[marker.Ecosystem],
+						marker.Label,
+					)
+					break
+				}
+			}
+			continue
+		}
+
 		if baseNames[marker.Path] {
 			result.Ecosystems[marker.Ecosystem] = append(
 				result.Ecosystems[marker.Ecosystem],
@@ -124,7 +172,7 @@ func DetectFromFiles(files []string) *DetectResult {
 }
 
 // DetectFromEcosystemFlag parses a comma-separated ecosystem flag value
-// like "go,node" into DetectResult.
+// like "go,node,php" into DetectResult.
 func DetectFromEcosystemFlag(flag string) *DetectResult {
 	result := &DetectResult{
 		Ecosystems: make(map[Type][]string),
@@ -149,6 +197,12 @@ func DetectFromEcosystemFlag(flag string) *DetectResult {
 			result.Ecosystems[Java] = []string{part}
 		case "ruby", "bundler":
 			result.Ecosystems[Ruby] = []string{"bundler"}
+		case "php", "composer":
+			result.Ecosystems[PHP] = []string{"composer"}
+		case "elixir", "mix":
+			result.Ecosystems[Elixir] = []string{"mix"}
+		case "dotnet", ".net", "csharp", "fsharp":
+			result.Ecosystems[DotNet] = []string{"dotnet"}
 		}
 	}
 

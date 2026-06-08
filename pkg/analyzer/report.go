@@ -12,12 +12,16 @@ type AuditReport struct {
 	TotalSize int64 `json:"total_size"`
 	// TotalSizeMB is the total size in megabytes.
 	TotalSizeMB float64 `json:"total_size_mb"`
+	// LayerCount is the total number of non-empty layers.
+	LayerCount int `json:"layer_count"`
 	// Layers contains per-layer analysis.
 	Layers []LayerInfo `json:"layers"`
 	// Ecosystems detected in the image.
 	Ecosystems *ecosystem.DetectResult `json:"ecosystems"`
 	// Duplicates are files found in multiple layers.
 	Duplicates []DuplicateFile `json:"duplicates,omitempty"`
+	// SecretFiles lists files that look like they may contain secrets.
+	SecretFiles []string `json:"secret_files,omitempty"`
 	// Recommendations are actionable suggestions to reduce image size.
 	Recommendations []Recommendation `json:"recommendations"`
 	// SavingsMB is the total estimated savings in megabytes.

@@ -46,14 +46,16 @@
 
 ## Features
 
-- 🔍 **Layer-by-layer audit** — exact MB per instruction, top 10 largest files per layer
-- 🌐 **Multi-ecosystem ignore generation** — Node, Go, Python, Rust, Java, Ruby auto-detected
-- 📋 **Duplicate file detection** — catches files silently copied across layers (common in `RUN apt-get` chains)
-- 🔧 **Dockerfile rewriter** — outputs a multi-stage optimized Dockerfile
+- 🔍 **Layer-by-layer audit** — exact MB per instruction, file count + top largest files per layer
+- 🌐 **Multi-ecosystem detection** — Node.js, Go, Python, Rust, Java, Ruby, **PHP, Elixir, .NET** auto-detected
+- 🔐 **Secrets scanner** — warns when `.env`, `id_rsa`, `*.pem`, `*.key` and similar files are baked into layers
+- 📋 **Duplicate file detection** — catches files silently copied across layers, sorted by wasted space
+- 🔧 **Dockerfile rewriter** — multi-stage optimized Dockerfile with distroless/alpine base, `USER nonroot`, correct package manager (pnpm/bun/yarn/npm), Gradle vs Maven detection
 - 📦 **`.dockerignore` generator** — tuned to your actual dependency graph, not generic patterns
 - 💰 **Savings estimate** — tells you how much space you'll save *before* you rebuild
 - 🚀 **Single Go binary** — no runtime, no daemon, no Docker socket required for `audit`
-- 🖥️ **CI-friendly** — JSON output mode, exit codes, quiet flag
+- 🖥️ **CI-friendly** — `--exit-code` gate, JSON output, quiet mode, `--remote` compare
+- 🏗️ **Multi-arch Docker images** — `linux/amd64` + `linux/arm64` manifests on both GHCR and Docker Hub
 
 ---
 
@@ -81,9 +83,16 @@ Pre-built binaries for Linux (`amd64`, `arm64`), macOS (`arm64`), and Windows ar
 
 ### Docker
 
+Images are published to both **GitHub Container Registry** and **Docker Hub** with multi-arch (`amd64` + `arm64`) manifests:
+
 ```bash
+# GitHub Container Registry
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/NotHarshhaa/slimify audit myapp:latest
+  ghcr.io/notharshhaa/slimify audit myapp:latest
+
+# Docker Hub
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  harshhaareddy/slimify audit myapp:latest
 ```
 
 ---
@@ -115,32 +124,38 @@ $ slimify audit myapp:latest
   slimify audit — myapp:latest
   ─────────────────────────────────────────────────────
 
-  Image size:       847 MB
+  Image size:        847 MB
+  Layers:            5
   Potential savings: 312 MB  (36%)
-  Ecosystem detected: Node.js (npm), Python (pip)
+  Ecosystem detected: Node.js(npm), Python(pip)
+
+  ⚠  SECRETS DETECTED IN IMAGE LAYERS:
+       .env
+     These files should NEVER be baked into an image.
+     Add them to .dockerignore and rotate any exposed credentials.
 
   Layer breakdown:
-  ┌──────────────────────────────────────┬──────────┬──────────┐
-  │ Instruction                          │ Size     │ Delta    │
-  ├──────────────────────────────────────┼──────────┼──────────┤
-  │ FROM node:20                         │  342 MB  │ baseline │
-  │ RUN apt-get install -y build-essential│  61 MB  │ +61 MB   │
-  │ COPY . .                             │  218 MB  │ +218 MB  │  ← bloat
-  │ RUN npm install                      │  187 MB  │ +187 MB  │  ← bloat
-  │ RUN npm run build                    │  39 MB   │ +39 MB   │
-  └──────────────────────────────────────┴──────────┴──────────┘
+  ┌───┬──────────────────────────────────────┬──────────┬───────┬──────────┐
+  │ # │ Instruction                          │ Size     │ Files │ Delta    │
+  ├───┼──────────────────────────────────────┼──────────┼───────┼──────────┤
+  │ 0 │ FROM node:20                         │  342 MB  │  4821 │ baseline │
+  │ 1 │ RUN apt-get install -y build-essenti │   61 MB  │   312 │ +61 MB   │
+  │ 2 │ COPY . .                             │  218 MB  │  1843 │ +218 MB  │
+  │ 3 │ RUN npm install                      │  187 MB  │ 24891 │ +187 MB  │
+  │ 4 │ RUN npm run build                    │   39 MB  │   521 │ +39 MB   │
+  └───┴──────────────────────────────────────┴──────────┴───────┴──────────┘
 
   Top offenders in COPY . . :
-    node_modules/       182 MB   ← not needed, add to .dockerignore
-    .git/               28 MB    ← not needed, add to .dockerignore
-    coverage/           4.2 MB   ← not needed
-    *.map files         2.1 MB   ← strip source maps
+    node_modules/       182 MB
+    .git/                28 MB
+    coverage/           4.2 MB
+    *.map files         2.1 MB
 
   Duplicate files across layers:
-    package-lock.json   copied in layer 3 and layer 5 — consolidate
+    package-lock.json   copied in layer 2 and layer 3 — consolidate
 
   Recommendations:
-    [1] Switch to multi-stage build                → save ~187 MB (node_modules)
+    [1] Switch to multi-stage build (Node.js)      → save ~187 MB
     [2] Use node:20-alpine as base                 → save ~95 MB
     [3] Generate .dockerignore (run slimify fix)   → save ~34 MB from COPY context
     [4] Merge RUN apt-get + cleanup in one layer   → save ~18 MB
@@ -150,13 +165,15 @@ $ slimify audit myapp:latest
 
 **Flags:**
 
-| Flag | Description |
-|---|---|
-| `--remote` | Audit a remote image from a registry without pulling |
-| `--json` | Output report as JSON (for CI/CD pipelines) |
-| `--quiet` | Only print the savings summary line |
-| `--top N` | Show top N largest files per layer (default: 10) |
-| `--threshold MB` | Only flag files larger than N MB (default: 1) |
+| Flag | Default | Description |
+|---|---|---|
+| `--remote` | `false` | Audit a remote image from a registry without pulling |
+| `--json` | `false` | Output report as JSON (for CI/CD pipelines) |
+| `--quiet` | `false` | Only print the one-line savings summary |
+| `--top N` | `10` | Show top N largest files per layer |
+| `--threshold MB` | `1.0` | Only flag files larger than N MB |
+| `--no-secrets` | `false` | Skip scanning for secret files in layers |
+| `--exit-code` | `false` | Exit with code 1 if potential savings exceed threshold (CI gate) |
 
 ---
 
@@ -184,13 +201,14 @@ slimify fix myapp:latest --dockerfile ./Dockerfile --out ./slimify-out/
 
 **Flags:**
 
-| Flag | Description |
-|---|---|
-| `--dockerfile PATH` | Path to your existing Dockerfile (required for rewrite) |
-| `--out DIR` | Output directory for generated files (default: `.`) |
-| `--write` | Write files in-place, overwriting existing ones |
-| `--no-rewrite` | Only generate `.dockerignore`, skip Dockerfile rewrite |
-| `--dry-run` | Print the generated output to stdout, don't write files |
+| Flag | Default | Description |
+|---|---|---|
+| `--dockerfile PATH` | — | Path to your existing Dockerfile (required for rewrite) |
+| `--out DIR` | `.` | Output directory for generated files |
+| `--write` | `false` | Write files in-place, overwriting existing ones |
+| `--no-rewrite` | `false` | Only generate `.dockerignore`, skip Dockerfile rewrite |
+| `--dry-run` | `false` | Print the generated output to stdout, don't write files |
+| `--platform PLATFORM` | — | Target platform injected into the `FROM` line (e.g. `linux/amd64`) |
 
 ---
 
@@ -200,17 +218,32 @@ Diff two image versions side by side — useful for validating that a rebuild ac
 
 ```bash
 slimify compare myapp:v1.0 myapp:v2.0
+
+# Compare remote images without pulling
+slimify compare myapp:v1.0 myapp:v2.0 --remote
 ```
 
 ```
-  Image A (myapp:v1.0):   847 MB
-  Image B (myapp:v2.0):   198 MB
-  Reduction:              649 MB (76%)
+  slimify compare
+  ─────────────────────────────────────────────────────
 
-  New layers in B:        3
-  Removed layers in B:    7
-  Shared base layers:     2
+  Image A:  myapp:v1.0                   847 MiB
+  Image B:  myapp:v2.0                   198 MiB
+
+  ▼ Reduction:  649 MiB (76.7% smaller)
+
+  Layers A → B:    12 → 5
+  New layers in B:       3
+  Removed layers in B:   7
+  Shared base layers:    2
 ```
+
+**Flags:**
+
+| Flag | Description |
+|---|---|
+| `--remote` | Compare images from a remote registry without pulling |
+| `--json` | Output as JSON |
 
 ---
 
@@ -229,21 +262,35 @@ slimify ignore > .dockerignore
 slimify ignore --write .dockerignore
 
 # Force a specific ecosystem
-slimify ignore --ecosystem go,node
+slimify ignore --ecosystem go,node,php
+
+# Scan a subdirectory (useful in monorepos)
+slimify ignore --dir ./services/api
 ```
 
-The `ignore` command detects your ecosystem from lock files and project structure:
+The `ignore` command detects your ecosystem from lock files and project structure (scans up to 4 directory levels deep):
 
 | Detected file | Ecosystem |
 |---|---|
-| `package.json`, `package-lock.json`, `yarn.lock` | Node.js |
+| `package.json`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lockb`, `deno.lock` | Node.js |
 | `go.mod`, `go.sum` | Go |
-| `requirements.txt`, `Pipfile`, `pyproject.toml` | Python |
+| `requirements.txt`, `Pipfile`, `pyproject.toml`, `uv.lock` | Python |
 | `Cargo.toml`, `Cargo.lock` | Rust |
-| `pom.xml`, `build.gradle` | Java |
+| `pom.xml`, `build.gradle`, `build.gradle.kts` | Java |
 | `Gemfile`, `Gemfile.lock` | Ruby |
+| `composer.json`, `composer.lock` | **PHP** |
+| `mix.exs`, `mix.lock` | **Elixir** |
+| `*.csproj`, `*.fsproj`, `global.json`, `nuget.config` | **.NET** |
 
 Multiple ecosystems in the same project are supported.
+
+**Flags:**
+
+| Flag | Description |
+|---|---|
+| `--write PATH` | Write directly to a file path |
+| `--ecosystem LIST` | Force specific ecosystems (comma-separated: `go,node,python,rust,java,ruby,php,elixir,dotnet`) |
+| `--dir PATH` | Directory to scan instead of `.` (useful for monorepos) |
 
 ---
 
@@ -296,8 +343,14 @@ You can also use any [cosmiconfig](https://github.com/davidtheclark/cosmiconfig)
 ### Shell (any CI)
 
 ```bash
-# Exit 1 if image has >100 MB of potential savings
+# Native exit-code gate — no jq needed
+slimify audit myapp:latest --exit-code --threshold 100
+
+# Or parse JSON output manually
 slimify audit myapp:latest --json | jq -e '.savings_mb < 100'
+
+# Also check for secrets in CI
+slimify audit myapp:latest --json | jq -e '.secret_files | length == 0'
 ```
 
 ---
@@ -313,9 +366,13 @@ slimify audit myapp:latest --json | jq -e '.savings_mb < 100'
 
 The `fix` command feeds the audit output into a Dockerfile parser, identifies stage boundaries, and rewrites using:
 - Multi-stage builds that discard the build stage's `node_modules` / build cache
+- Correct package manager per ecosystem: `npm ci`, `yarn --frozen-lockfile`, `pnpm install --frozen-lockfile`, `bun install`
+- Gradle vs Maven auto-detection for Java projects
 - `--no-cache` flags on package manager installs
 - Merged `RUN` instructions to eliminate dead layer space
-- `alpine` or `distroless` base image suggestions where viable
+- `distroless` base images for Go, Rust, and Java; `alpine`/`slim` for everything else
+- `USER nonroot` / `USER node` for security best-practices in the runtime stage
+- `COPY --chown=node:node` for Node.js non-root file ownership
 
 Everything runs locally. `slimify` never uploads your image or Dockerfile anywhere.
 
@@ -327,25 +384,32 @@ Everything runs locally. `slimify` never uploads your image or Dockerfile anywhe
 |---|:---:|:---:|:---:|:---:|:---:|
 | Layer-level analysis | ✅ | ❌ | ✅ | ✅ | ✅ |
 | File-level breakdown | ✅ | ❌ | ❌ | ✅ | ❌ |
-| Multi-ecosystem support | ✅ | ❌ (Node only) | N/A | N/A | N/A |
+| Multi-ecosystem support | ✅ (9 ecosystems) | ❌ (Node only) | N/A | N/A | N/A |
 | `.dockerignore` generation | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Dockerfile rewriter | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Secrets-in-layers detection | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Savings estimate upfront | ✅ | ❌ | ❌ | ❌ | ❌ |
 | No container runtime needed | ✅ | ✅ | ❌ | ❌ | ❌ |
-| CI-friendly JSON output | ✅ | ❌ | ❌ | ❌ | ✅ |
+| CI-friendly JSON + exit-code | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Multi-arch Docker image | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Single binary | ✅ | ❌ (npm) | ❌ (Rust) | ✅ | ✅ |
 
 ---
 
 ## Roadmap
 
-- [ ] `slimify audit` — remote registry support (ECR, GCR, ACR) without local pull
-- [ ] `slimify fix --base distroless` — distroless base image rewrite support
+- [x] `slimify audit --remote` — remote registry support without local pull
+- [x] `slimify fix --base distroless` — distroless base image rewrite support
+- [x] `slimify audit --exit-code` — native CI gate flag
+- [x] PHP, Elixir, .NET ecosystem support
+- [x] Secrets-in-layers detection
+- [x] Multi-arch Docker images (amd64 + arm64) on GHCR and Docker Hub
 - [ ] VS Code extension — inline `.dockerignore` suggestions in the editor
 - [ ] GitHub Actions Marketplace release
 - [ ] GitLab CI/CD Catalog release
 - [ ] SBOM output alongside audit report
 - [ ] `slimify watch` — re-audit on every `docker build` in a dev loop
+- [ ] ECR / GCR / ACR private registry auth support
 
 ---
 

@@ -17,6 +17,7 @@ var UniversalBloatPatterns = []BloatPattern{
 	{Pattern: ".git/", Description: "Git history — not needed in images"},
 	{Pattern: ".git", Description: "Git directory"},
 	{Pattern: ".gitignore", Description: "Git ignore file"},
+	{Pattern: ".gitattributes", Description: "Git attributes file"},
 	{Pattern: ".github/", Description: "GitHub metadata"},
 	{Pattern: ".vscode/", Description: "VS Code settings"},
 	{Pattern: ".idea/", Description: "JetBrains IDE settings"},
@@ -25,6 +26,7 @@ var UniversalBloatPatterns = []BloatPattern{
 	{Pattern: "*.txt", Description: "Text files (README, CHANGELOG, etc.)"},
 	{Pattern: "LICENSE*", Description: "License files"},
 	{Pattern: "CHANGELOG*", Description: "Changelog files"},
+	{Pattern: "CONTRIBUTING*", Description: "Contribution guidelines"},
 	{Pattern: "docs/", Description: "Documentation directory"},
 	{Pattern: "doc/", Description: "Documentation directory"},
 	{Pattern: "test/", Description: "Test directory"},
@@ -45,12 +47,19 @@ var UniversalBloatPatterns = []BloatPattern{
 	{Pattern: "*.log", Description: "Log files"},
 	{Pattern: "tmp/", Description: "Temporary files"},
 	{Pattern: ".tmp/", Description: "Temporary files"},
+	{Pattern: ".cache/", Description: "Generic cache directory"},
+	{Pattern: ".DS_Store", Description: "macOS metadata file"},
+	{Pattern: "Thumbs.db", Description: "Windows thumbnail cache"},
+	{Pattern: "*.swp", Description: "Vim swap files"},
+	{Pattern: "*.swo", Description: "Vim swap files"},
+	{Pattern: "*.bak", Description: "Backup files"},
 }
 
 // EcosystemBloatPatterns maps each ecosystem to its specific bloat patterns.
 var EcosystemBloatPatterns = map[Type][]BloatPattern{
 	NodeJS: {
 		{Pattern: "node_modules/", Description: "Node dependencies — use multi-stage build", Ecosystem: NodeJS},
+		{Pattern: "node_modules/.cache/", Description: "Build tool caches inside node_modules", Ecosystem: NodeJS},
 		{Pattern: ".npm/", Description: "npm cache", Ecosystem: NodeJS},
 		{Pattern: ".yarn/", Description: "Yarn cache", Ecosystem: NodeJS},
 		{Pattern: ".pnpm-store/", Description: "pnpm store", Ecosystem: NodeJS},
@@ -64,6 +73,7 @@ var EcosystemBloatPatterns = map[Type][]BloatPattern{
 		{Pattern: "webpack.config*", Description: "Webpack config (if pre-built)", Ecosystem: NodeJS},
 		{Pattern: "storybook/", Description: "Storybook", Ecosystem: NodeJS},
 		{Pattern: ".storybook/", Description: "Storybook config", Ecosystem: NodeJS},
+		{Pattern: ".next/cache/", Description: "Next.js build cache", Ecosystem: NodeJS},
 	},
 	Go: {
 		{Pattern: "vendor/", Description: "Go vendor directory — use go mod download", Ecosystem: Go},
@@ -71,6 +81,7 @@ var EcosystemBloatPatterns = map[Type][]BloatPattern{
 		{Pattern: "testdata/", Description: "Go test data", Ecosystem: Go},
 		{Pattern: ".golangci.yml", Description: "Linter config", Ecosystem: Go},
 		{Pattern: ".golangci.yaml", Description: "Linter config", Ecosystem: Go},
+		{Pattern: "*.test", Description: "Go compiled test binaries", Ecosystem: Go},
 	},
 	Python: {
 		{Pattern: "__pycache__/", Description: "Python bytecode cache", Ecosystem: Python},
@@ -85,6 +96,7 @@ var EcosystemBloatPatterns = map[Type][]BloatPattern{
 		{Pattern: ".venv/", Description: "Virtual environment", Ecosystem: Python},
 		{Pattern: "venv/", Description: "Virtual environment", Ecosystem: Python},
 		{Pattern: "env/", Description: "Virtual environment", Ecosystem: Python},
+		{Pattern: ".ruff_cache/", Description: "Ruff linter cache", Ecosystem: Python},
 	},
 	Rust: {
 		{Pattern: "target/", Description: "Rust build artifacts", Ecosystem: Rust},
@@ -100,6 +112,7 @@ var EcosystemBloatPatterns = map[Type][]BloatPattern{
 		{Pattern: "*.jar", Description: "JAR files (use multi-stage)", Ecosystem: Java},
 		{Pattern: "*.war", Description: "WAR files", Ecosystem: Java},
 		{Pattern: ".mvn/", Description: "Maven wrapper", Ecosystem: Java},
+		{Pattern: "*.iml", Description: "IntelliJ module files", Ecosystem: Java},
 	},
 	Ruby: {
 		{Pattern: ".bundle/", Description: "Bundler metadata", Ecosystem: Ruby},
@@ -107,6 +120,32 @@ var EcosystemBloatPatterns = map[Type][]BloatPattern{
 		{Pattern: ".rubocop*", Description: "Rubocop config", Ecosystem: Ruby},
 		{Pattern: "*.gem", Description: "Gem files", Ecosystem: Ruby},
 		{Pattern: "log/", Description: "Rails log directory", Ecosystem: Ruby},
+		{Pattern: "tmp/", Description: "Rails tmp directory", Ecosystem: Ruby},
+	},
+	PHP: {
+		{Pattern: "vendor/", Description: "Composer vendor directory", Ecosystem: PHP},
+		{Pattern: ".phpunit*", Description: "PHPUnit config/cache", Ecosystem: PHP},
+		{Pattern: "*.phpunit.result.cache", Description: "PHPUnit result cache", Ecosystem: PHP},
+		{Pattern: ".php-cs-fixer*", Description: "PHP CS Fixer config", Ecosystem: PHP},
+		{Pattern: "storage/logs/", Description: "Laravel/Symfony logs", Ecosystem: PHP},
+		{Pattern: "bootstrap/cache/", Description: "Laravel bootstrap cache", Ecosystem: PHP},
+		{Pattern: "var/cache/", Description: "Symfony cache", Ecosystem: PHP},
+		{Pattern: "var/log/", Description: "Symfony logs", Ecosystem: PHP},
+	},
+	Elixir: {
+		{Pattern: "_build/", Description: "Elixir/Mix build artifacts", Ecosystem: Elixir},
+		{Pattern: "deps/", Description: "Mix dependencies", Ecosystem: Elixir},
+		{Pattern: ".elixir_ls/", Description: "ElixirLS language server data", Ecosystem: Elixir},
+		{Pattern: "priv/static/", Description: "Phoenix compiled static assets (if pre-built)", Ecosystem: Elixir},
+	},
+	DotNet: {
+		{Pattern: "bin/", Description: ".NET build output", Ecosystem: DotNet},
+		{Pattern: "obj/", Description: ".NET intermediate build files", Ecosystem: DotNet},
+		{Pattern: "*.nupkg", Description: "NuGet packages", Ecosystem: DotNet},
+		{Pattern: "*.snupkg", Description: "NuGet symbol packages", Ecosystem: DotNet},
+		{Pattern: ".vs/", Description: "Visual Studio metadata", Ecosystem: DotNet},
+		{Pattern: "packages/", Description: "NuGet packages directory (legacy)", Ecosystem: DotNet},
+		{Pattern: "TestResults/", Description: ".NET test results", Ecosystem: DotNet},
 	},
 }
 

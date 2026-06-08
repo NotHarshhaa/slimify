@@ -1,5 +1,7 @@
 package analyzer
 
+import "sort"
+
 // DuplicateFile represents a file found in multiple layers.
 type DuplicateFile struct {
 	// Path is the file path within the image.
@@ -10,9 +12,13 @@ type DuplicateFile struct {
 	Layers []int `json:"layers"`
 }
 
+// maxDuplicates caps the number of reported duplicates to avoid flooding output.
+const maxDuplicates = 50
+
 // DetectDuplicates finds files that appear in more than one layer.
 // This catches the common case where files are silently copied across
 // layers (e.g., in `RUN apt-get` chains or repeated COPY instructions).
+// Results are sorted by size descending so the biggest wasted space appears first.
 func DetectDuplicates(layers []LayerInfo) []DuplicateFile {
 	// Map: file path -> list of layer indices and size
 	type fileOccurrence struct {
@@ -58,6 +64,16 @@ func DetectDuplicates(layers []LayerInfo) []DuplicateFile {
 				Layers: occ.layers,
 			})
 		}
+	}
+
+	// Sort by size descending — biggest waste first.
+	sort.Slice(duplicates, func(i, j int) bool {
+		return duplicates[i].Size > duplicates[j].Size
+	})
+
+	// Cap results to avoid flooding output.
+	if len(duplicates) > maxDuplicates {
+		duplicates = duplicates[:maxDuplicates]
 	}
 
 	return duplicates

@@ -5,6 +5,7 @@ package analyzer
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -24,6 +25,8 @@ type ImageAnalyzer struct {
 	TopFilesPerLayer int
 	// ThresholdBytes is the minimum file size to flag.
 	ThresholdBytes int64
+	// ScanSecrets enables scanning for files that may contain secrets.
+	ScanSecrets bool
 }
 
 // NewImageAnalyzer creates an analyzer with the given settings.
@@ -31,7 +34,49 @@ func NewImageAnalyzer(topFiles int, thresholdMB float64) *ImageAnalyzer {
 	return &ImageAnalyzer{
 		TopFilesPerLayer: topFiles,
 		ThresholdBytes:   int64(thresholdMB * 1024 * 1024),
+		ScanSecrets:      true,
 	}
+}
+
+// secretPatterns are file paths / basenames that may contain sensitive data.
+var secretPatterns = []string{
+	".env",
+	"id_rsa",
+	"id_dsa",
+	"id_ecdsa",
+	"id_ed25519",
+	".ssh",
+	"*.pem",
+	"*.key",
+	"*.p12",
+	"*.pfx",
+	"*.jks",
+	"*.keystore",
+	"*.asc",
+	"secrets.yaml",
+	"secrets.yml",
+	"secrets.json",
+	"credentials",
+	".aws/credentials",
+	".netrc",
+	"kubeconfig",
+}
+
+// looksLikeSecret returns true if the path matches a known secret file pattern.
+func looksLikeSecret(path string) bool {
+	base := filepath.Base(path)
+	for _, pattern := range secretPatterns {
+		if strings.Contains(pattern, "*") {
+			if matched, _ := filepath.Match(pattern, base); matched {
+				return true
+			}
+			continue
+		}
+		if base == pattern || strings.HasSuffix(path, "/"+pattern) || path == pattern {
+			return true
+		}
+	}
+	return false
 }
 
 // AnalyzeImage loads and analyzes a Docker image, returning a full report.
@@ -101,6 +146,7 @@ func (a *ImageAnalyzer) analyze(imageRef string, img v1.Image) (*AuditReport, er
 	// Analyze each layer
 	allFiles := make(map[string]bool)
 	var layerInfos []LayerInfo
+	var secretFiles []string
 
 	for i, layer := range layers {
 		instruction := "unknown"
@@ -118,9 +164,12 @@ func (a *ImageAnalyzer) analyze(imageRef string, img v1.Image) (*AuditReport, er
 			files = []FileEntry{}
 		}
 
-		// Track all files for ecosystem detection
+		// Track all files for ecosystem detection and secrets scanning
 		for _, f := range files {
 			allFiles[f.Path] = true
+			if a.ScanSecrets && !f.IsDir && looksLikeSecret(f.Path) {
+				secretFiles = append(secretFiles, f.Path)
+			}
 		}
 
 		// Sort files by size descending
@@ -142,18 +191,26 @@ func (a *ImageAnalyzer) analyze(imageRef string, img v1.Image) (*AuditReport, er
 			}
 		}
 
+		isEmptyLayer := false
+		if i < len(configFile.History) {
+			isEmptyLayer = configFile.History[i].EmptyLayer
+		}
+
 		layerInfo := LayerInfo{
-			Index:        i,
-			Instruction:  instruction,
-			Size:         size,
-			FileCount:    len(files),
-			TopFiles:     flaggedFiles,
-			AllFiles:     files,
-			IsEmpty:      configFile.History[i].EmptyLayer,
+			Index:       i,
+			Instruction: instruction,
+			Size:        size,
+			FileCount:   len(files),
+			TopFiles:    flaggedFiles,
+			AllFiles:    files,
+			IsEmpty:     isEmptyLayer,
 		}
 
 		layerInfos = append(layerInfos, layerInfo)
 	}
+
+	// Deduplicate secret files list
+	secretFiles = uniqueSecrets(secretFiles)
 
 	// Detect ecosystems from all files in the image
 	var filePaths []string
@@ -175,22 +232,37 @@ func (a *ImageAnalyzer) analyze(imageRef string, img v1.Image) (*AuditReport, er
 		savingsMB += rec.SavingsMB
 	}
 
-	report := &AuditReport{
-		ImageRef:       imageRef,
-		TotalSize:      totalSize,
-		Layers:         layerInfos,
-		Ecosystems:     ecosystems,
-		Duplicates:     duplicates,
-		Recommendations: recommendations,
-		SavingsMB:      savingsMB,
-		SavingsPercent: 0,
+	// Count non-empty layers
+	layerCount := 0
+	for _, l := range layerInfos {
+		if !l.IsEmpty {
+			layerCount++
+		}
 	}
 
+	report := &AuditReport{
+		ImageRef:        imageRef,
+		TotalSize:       totalSize,
+		LayerCount:      layerCount,
+		Layers:          layerInfos,
+		Ecosystems:      ecosystems,
+		Duplicates:      duplicates,
+		SecretFiles:     secretFiles,
+		Recommendations: recommendations,
+		SavingsMB:       savingsMB,
+		SavingsPercent:  0,
+	}
+
+	// Fix: compute savings percent as (savingsMB / totalSizeMB) * 100
 	if totalSize > 0 {
-		report.SavingsPercent = (savingsMB / float64(totalSize) * 1024 * 1024) * 100
-		// Cap at 100%
-		if report.SavingsPercent > 100 {
-			report.SavingsPercent = float64(int(savingsMB / (float64(totalSize) / (1024 * 1024)) * 100))
+		totalSizeMB := float64(totalSize) / (1024 * 1024)
+		if totalSizeMB > 0 {
+			pct := (savingsMB / totalSizeMB) * 100
+			// Cap at 95% — estimates are never perfectly accurate
+			if pct > 95 {
+				pct = 95
+			}
+			report.SavingsPercent = pct
 		}
 	}
 
@@ -251,7 +323,7 @@ func generateRecommendations(layers []LayerInfo, eco *ecosystem.DetectResult, pa
 		}
 	}
 
-	// Check for multi-stage build opportunity
+	// Check for Node.js multi-stage build opportunity
 	if eco.HasEcosystem(ecosystem.NodeJS) {
 		var nodeModulesSize float64
 		for _, layer := range layers {
@@ -263,9 +335,29 @@ func generateRecommendations(layers []LayerInfo, eco *ecosystem.DetectResult, pa
 		}
 		if nodeModulesSize > 10 {
 			recs = append(recs, Recommendation{
-				Title:     "Switch to multi-stage build",
+				Title:     "Switch to multi-stage build (Node.js)",
 				Detail:    "Discard build-stage node_modules and only copy production artifacts",
 				SavingsMB: nodeModulesSize * 0.6, // estimate 60% savings
+				Priority:  1,
+			})
+		}
+	}
+
+	// Check for Python multi-stage build opportunity
+	if eco.HasEcosystem(ecosystem.Python) {
+		var sitePackagesSize float64
+		for _, layer := range layers {
+			for _, f := range layer.AllFiles {
+				if strings.Contains(f.Path, "site-packages/") || strings.Contains(f.Path, "__pycache__/") {
+					sitePackagesSize += float64(f.Size) / (1024 * 1024)
+				}
+			}
+		}
+		if sitePackagesSize > 20 {
+			recs = append(recs, Recommendation{
+				Title:     "Switch to multi-stage build (Python)",
+				Detail:    "Use --prefix=/install in pip and COPY only the install dir to the runtime stage",
+				SavingsMB: sitePackagesSize * 0.3, // estimate 30% savings from removing dev tools
 				Priority:  1,
 			})
 		}
@@ -277,12 +369,23 @@ func generateRecommendations(layers []LayerInfo, eco *ecosystem.DetectResult, pa
 			instruction := strings.ToLower(layer.Instruction)
 			if strings.Contains(instruction, "from") && !strings.Contains(instruction, "alpine") && !strings.Contains(instruction, "slim") && !strings.Contains(instruction, "distroless") {
 				estimatedSavings := float64(layer.Size) / (1024 * 1024) * 0.35
-				recs = append(recs, Recommendation{
-					Title:     "Use an alpine or slim base image",
-					Detail:    fmt.Sprintf("Current base layer is %.0f MB — switch to alpine/slim variant", float64(layer.Size)/(1024*1024)),
-					SavingsMB: estimatedSavings,
-					Priority:  1,
-				})
+
+				// Suggest distroless for compiled languages
+				if eco.HasEcosystem(ecosystem.Go) || eco.HasEcosystem(ecosystem.Rust) || eco.HasEcosystem(ecosystem.Java) {
+					recs = append(recs, Recommendation{
+						Title:     "Use a distroless base image",
+						Detail:    fmt.Sprintf("Current base layer is %.0f MB — switch to gcr.io/distroless/... for a minimal, secure runtime", float64(layer.Size)/(1024*1024)),
+						SavingsMB: estimatedSavings,
+						Priority:  1,
+					})
+				} else {
+					recs = append(recs, Recommendation{
+						Title:     "Use an alpine or slim base image",
+						Detail:    fmt.Sprintf("Current base layer is %.0f MB — switch to alpine/slim variant", float64(layer.Size)/(1024*1024)),
+						SavingsMB: estimatedSavings,
+						Priority:  1,
+					})
+				}
 			}
 		}
 	}
@@ -330,4 +433,17 @@ func generateRecommendations(layers []LayerInfo, eco *ecosystem.DetectResult, pa
 	})
 
 	return recs
+}
+
+// uniqueSecrets deduplicates a list of secret file paths.
+func uniqueSecrets(paths []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, p := range paths {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }

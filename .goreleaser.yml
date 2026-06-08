@@ -77,27 +77,86 @@ brews:
     test: |
       system "#{bin}/slimify", "--version"
 
+# ── Docker images (buildx, per-arch) ────────────────────────────────────────
 dockers:
-  # ── GitHub Container Registry ──────────────────────────────────────────────
+  # ── GitHub Container Registry — amd64 ──────────────────────────────────────
   - image_templates:
-      - "ghcr.io/notharshhaa/slimify:{{ .Version }}"
-      - "ghcr.io/notharshhaa/slimify:latest"
+      - "ghcr.io/notharshhaa/slimify:{{ .Version }}-amd64"
     dockerfile: Dockerfile
+    use: buildx
+    goarch: amd64
     build_flag_templates:
       - "--pull"
+      - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.title=slimify"
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.source=https://github.com/NotHarshhaa/slimify"
       - "--label=org.opencontainers.image.licenses=MIT"
 
-  # ── Docker Hub ─────────────────────────────────────────────────────────────
+  # ── GitHub Container Registry — arm64 ──────────────────────────────────────
   - image_templates:
-      - "docker.io/harshhaareddy/slimify:{{ .Version }}"
-      - "docker.io/harshhaareddy/slimify:latest"
+      - "ghcr.io/notharshhaa/slimify:{{ .Version }}-arm64"
     dockerfile: Dockerfile
+    use: buildx
+    goarch: arm64
     build_flag_templates:
       - "--pull"
+      - "--platform=linux/arm64"
       - "--label=org.opencontainers.image.title=slimify"
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.source=https://github.com/NotHarshhaa/slimify"
       - "--label=org.opencontainers.image.licenses=MIT"
+
+  # ── Docker Hub — amd64 ─────────────────────────────────────────────────────
+  - image_templates:
+      - "docker.io/harshhaareddy/slimify:{{ .Version }}-amd64"
+    dockerfile: Dockerfile
+    use: buildx
+    goarch: amd64
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title=slimify"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source=https://github.com/NotHarshhaa/slimify"
+      - "--label=org.opencontainers.image.licenses=MIT"
+
+  # ── Docker Hub — arm64 ─────────────────────────────────────────────────────
+  - image_templates:
+      - "docker.io/harshhaareddy/slimify:{{ .Version }}-arm64"
+    dockerfile: Dockerfile
+    use: buildx
+    goarch: arm64
+    build_flag_templates:
+      - "--pull"
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title=slimify"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source=https://github.com/NotHarshhaa/slimify"
+      - "--label=org.opencontainers.image.licenses=MIT"
+
+# ── Multi-arch manifests (combines per-arch images into a single tag) ────────
+docker_manifests:
+  # GHCR — versioned
+  - name_template: "ghcr.io/notharshhaa/slimify:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/notharshhaa/slimify:{{ .Version }}-amd64"
+      - "ghcr.io/notharshhaa/slimify:{{ .Version }}-arm64"
+
+  # GHCR — latest
+  - name_template: "ghcr.io/notharshhaa/slimify:latest"
+    image_templates:
+      - "ghcr.io/notharshhaa/slimify:{{ .Version }}-amd64"
+      - "ghcr.io/notharshhaa/slimify:{{ .Version }}-arm64"
+
+  # Docker Hub — versioned
+  - name_template: "docker.io/harshhaareddy/slimify:{{ .Version }}"
+    image_templates:
+      - "docker.io/harshhaareddy/slimify:{{ .Version }}-amd64"
+      - "docker.io/harshhaareddy/slimify:{{ .Version }}-arm64"
+
+  # Docker Hub — latest
+  - name_template: "docker.io/harshhaareddy/slimify:latest"
+    image_templates:
+      - "docker.io/harshhaareddy/slimify:{{ .Version }}-amd64"
+      - "docker.io/harshhaareddy/slimify:{{ .Version }}-arm64"

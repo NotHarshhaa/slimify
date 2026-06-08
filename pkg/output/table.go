@@ -18,6 +18,7 @@ var (
 	headerStyle  = color.New(color.FgHiCyan, color.Bold)
 	successStyle = color.New(color.FgHiGreen)
 	warningStyle = color.New(color.FgHiYellow)
+	errorStyle   = color.New(color.FgHiRed, color.Bold)
 	dimStyle     = color.New(color.FgHiBlack)
 	infoStyle    = color.New(color.FgHiBlue)
 )
@@ -36,6 +37,7 @@ func PrintAuditReport(report *analyzer.AuditReport, quiet bool) {
 
 	// Summary
 	fmt.Printf("  Image size:        %s\n", humanize.IBytes(uint64(report.TotalSize)))
+	fmt.Printf("  Layers:            %d\n", report.LayerCount)
 	if report.SavingsMB > 0 {
 		warningStyle.Printf("  Potential savings: %.0f MB  (%.0f%%)\n", report.SavingsMB, report.SavingsPercent)
 	} else {
@@ -44,6 +46,17 @@ func PrintAuditReport(report *analyzer.AuditReport, quiet bool) {
 
 	if report.Ecosystems != nil && len(report.Ecosystems.Ecosystems) > 0 {
 		fmt.Printf("  Ecosystem detected: %s\n", report.Ecosystems.String())
+	}
+
+	// Secrets warning — shown prominently above the layer table
+	if len(report.SecretFiles) > 0 {
+		fmt.Println()
+		errorStyle.Println("  ⚠  SECRETS DETECTED IN IMAGE LAYERS:")
+		for _, f := range report.SecretFiles {
+			errorStyle.Printf("       %s\n", f)
+		}
+		errorStyle.Println("     These files should NEVER be baked into an image.")
+		errorStyle.Println("     Add them to .dockerignore and rotate any exposed credentials.")
 	}
 
 	fmt.Println()
@@ -102,7 +115,7 @@ func PrintAuditReport(report *analyzer.AuditReport, quiet bool) {
 // printLayerTable renders the layer breakdown as an ASCII table.
 func printLayerTable(layers []analyzer.LayerInfo) {
 	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader([]string{"Instruction", "Size", "Delta"})
+	table.SetHeader([]string{"#", "Instruction", "Size", "Files", "Delta"})
 	table.SetBorder(true)
 	table.SetCenterSeparator("┼")
 	table.SetColumnSeparator("│")
@@ -124,11 +137,13 @@ func printLayerTable(layers []analyzer.LayerInfo) {
 		}
 
 		instruction := layer.Instruction
-		if len(instruction) > 45 {
-			instruction = instruction[:42] + "..."
+		if len(instruction) > 42 {
+			instruction = instruction[:39] + "..."
 		}
 
-		row := []string{instruction, sizeStr, deltaStr}
+		fileCount := fmt.Sprintf("%d", layer.FileCount)
+
+		row := []string{fmt.Sprintf("%d", layer.Index), instruction, sizeStr, fileCount, deltaStr}
 		table.Append(row)
 	}
 
@@ -142,28 +157,30 @@ func PrintCompareReport(report *analyzer.CompareReport) {
 	fmt.Println("  " + strings.Repeat("─", 53))
 	fmt.Println()
 
-	fmt.Printf("  Image A (%s):   %s\n", report.ImageA, humanize.IBytes(uint64(report.SizeA)))
-	fmt.Printf("  Image B (%s):   %s\n", report.ImageB, humanize.IBytes(uint64(report.SizeB)))
+	fmt.Printf("  Image A:  %-30s %s\n", report.ImageA, humanize.IBytes(uint64(report.SizeA)))
+	fmt.Printf("  Image B:  %-30s %s\n", report.ImageB, humanize.IBytes(uint64(report.SizeB)))
+	fmt.Println()
 
 	if report.Reduction > 0 {
-		successStyle.Printf("  Reduction:              %s (%.0f%%)\n",
+		successStyle.Printf("  ▼ Reduction:  %s (%.1f%% smaller)\n",
 			humanize.IBytes(uint64(report.Reduction)), report.ReductionPercent)
 	} else if report.Reduction < 0 {
-		warningStyle.Printf("  Increase:               %s (%.0f%%)\n",
+		warningStyle.Printf("  ▲ Increase:   %s (%.1f%% larger)\n",
 			humanize.IBytes(uint64(-report.Reduction)), -report.ReductionPercent)
 	} else {
-		fmt.Println("  Reduction:              none (same size)")
+		dimStyle.Println("  ↔ No change:  same compressed size")
 	}
 
 	fmt.Println()
-	fmt.Printf("  New layers in B:        %d\n", report.NewLayersInB)
-	fmt.Printf("  Removed layers in B:    %d\n", report.RemovedLayersInB)
-	fmt.Printf("  Shared base layers:     %d\n", report.SharedBaseLayers)
+	fmt.Printf("  Layers A → B:    %d → %d\n", report.LayersA, report.LayersB)
+	fmt.Printf("  New layers in B:       %d\n", report.NewLayersInB)
+	fmt.Printf("  Removed layers in B:   %d\n", report.RemovedLayersInB)
+	fmt.Printf("  Shared base layers:    %d\n", report.SharedBaseLayers)
 	fmt.Println()
 }
 
 // PrintFixSummary renders the output of a fix command.
-func PrintFixSummary(outputDir string, ignoreSaved int64, originalSize int64, hasDockerfile bool) {
+func PrintFixSummary(outputDir string, ignoreSaved int64, originalSize int64, hasDockerfile bool, savingsMB float64) {
 	fmt.Println()
 	headerStyle.Println("  slimify fix")
 	fmt.Println("  " + strings.Repeat("─", 53))
@@ -176,15 +193,26 @@ func PrintFixSummary(outputDir string, ignoreSaved int64, originalSize int64, ha
 	fmt.Println()
 
 	if hasDockerfile {
-		successStyle.Println("  ✓ Rewritten Dockerfile            (multi-stage, alpine base)")
+		successStyle.Println("  ✓ Rewritten Dockerfile            (multi-stage, optimized base)")
 
 		if originalSize > 0 {
-			estimated := float64(originalSize) * 0.3 // rough estimate
+			var estimated float64
+			if savingsMB > 0 {
+				// Use the real analysis-derived savings
+				estimated = float64(originalSize) - savingsMB*1024*1024
+				if estimated < 0 {
+					estimated = float64(originalSize) * 0.3
+				}
+			} else {
+				// Fallback rough estimate
+				estimated = float64(originalSize) * 0.3
+			}
+			savingsPct := (1 - estimated/float64(originalSize)) * 100
 			successStyle.Printf("  ✓ Estimated new image size: %s",
 				humanize.IBytes(uint64(estimated)))
 			dimStyle.Printf("  (was %s — %.0f%% smaller)\n",
 				humanize.IBytes(uint64(originalSize)),
-				(1-0.3)*100)
+				savingsPct)
 		}
 	}
 
@@ -216,10 +244,15 @@ func PrintIgnoreSummary(ecosystems string, patternCount int, written bool, path 
 
 // printQuietSummary prints only the one-line savings summary.
 func printQuietSummary(report *analyzer.AuditReport) {
-	fmt.Printf("%s: %s → savings: %.0f MB (%.0f%%)\n",
+	secretsNote := ""
+	if len(report.SecretFiles) > 0 {
+		secretsNote = fmt.Sprintf(" | ⚠ %d secret file(s) detected", len(report.SecretFiles))
+	}
+	fmt.Printf("%s: %s → savings: %.0f MB (%.0f%%)%s\n",
 		report.ImageRef,
 		humanize.IBytes(uint64(report.TotalSize)),
 		report.SavingsMB,
 		report.SavingsPercent,
+		secretsNote,
 	)
 }

@@ -15,6 +15,8 @@ type RewriteOptions struct {
 	MultiStage bool
 	// Ecosystems detected in the project.
 	Ecosystems *ecosystem.DetectResult
+	// Platform is an optional --platform value (e.g., "linux/amd64").
+	Platform string
 }
 
 // Rewrite takes a parsed Dockerfile and produces an optimized version.
@@ -37,6 +39,14 @@ func Rewrite(df *Dockerfile, opts RewriteOptions) string {
 	return b.String()
 }
 
+// platformPrefix returns "FROM --platform=<p> " or "FROM " depending on opts.
+func platformPrefix(opts RewriteOptions) string {
+	if opts.Platform != "" {
+		return fmt.Sprintf("FROM --platform=%s ", opts.Platform)
+	}
+	return "FROM "
+}
+
 // writeMultiStageRewrite creates a new multi-stage Dockerfile.
 func writeMultiStageRewrite(b *strings.Builder, df *Dockerfile, base string, opts RewriteOptions) {
 	buildBase := df.GetBaseImage()
@@ -46,7 +56,7 @@ func writeMultiStageRewrite(b *strings.Builder, df *Dockerfile, base string, opt
 
 	// Build stage
 	b.WriteString("# --- Build stage ---\n")
-	b.WriteString(fmt.Sprintf("FROM %s AS builder\n\n", buildBase))
+	b.WriteString(fmt.Sprintf("%s%s AS builder\n\n", platformPrefix(opts), buildBase))
 	b.WriteString("WORKDIR /app\n\n")
 
 	// Determine ecosystem-specific build steps
@@ -61,6 +71,12 @@ func writeMultiStageRewrite(b *strings.Builder, df *Dockerfile, base string, opt
 			writeRustBuildStage(b, df)
 		} else if opts.Ecosystems.HasEcosystem(ecosystem.Java) {
 			writeJavaBuildStage(b, df)
+		} else if opts.Ecosystems.HasEcosystem(ecosystem.PHP) {
+			writePHPBuildStage(b, df)
+		} else if opts.Ecosystems.HasEcosystem(ecosystem.Elixir) {
+			writeElixirBuildStage(b, df)
+		} else if opts.Ecosystems.HasEcosystem(ecosystem.DotNet) {
+			writeDotNetBuildStage(b, df)
 		} else {
 			writeGenericBuildStage(b, df)
 		}
@@ -70,7 +86,7 @@ func writeMultiStageRewrite(b *strings.Builder, df *Dockerfile, base string, opt
 
 	// Production stage
 	b.WriteString("\n# --- Production stage ---\n")
-	b.WriteString(fmt.Sprintf("FROM %s AS production\n\n", base))
+	b.WriteString(fmt.Sprintf("%s%s AS production\n\n", platformPrefix(opts), base))
 	b.WriteString("WORKDIR /app\n\n")
 
 	if opts.Ecosystems != nil {
@@ -84,6 +100,12 @@ func writeMultiStageRewrite(b *strings.Builder, df *Dockerfile, base string, opt
 			writeRustProdStage(b)
 		} else if opts.Ecosystems.HasEcosystem(ecosystem.Java) {
 			writeJavaProdStage(b)
+		} else if opts.Ecosystems.HasEcosystem(ecosystem.PHP) {
+			writePHPProdStage(b)
+		} else if opts.Ecosystems.HasEcosystem(ecosystem.Elixir) {
+			writeElixirProdStage(b)
+		} else if opts.Ecosystems.HasEcosystem(ecosystem.DotNet) {
+			writeDotNetProdStage(b)
 		} else {
 			writeGenericProdStage(b)
 		}
@@ -109,7 +131,7 @@ func writeSingleStageRewrite(b *strings.Builder, df *Dockerfile, base string, op
 	for _, inst := range df.Instructions {
 		switch inst.Command {
 		case "FROM":
-			b.WriteString(fmt.Sprintf("FROM %s\n\n", base))
+			b.WriteString(fmt.Sprintf("%s%s\n\n", platformPrefix(opts), base))
 		case "RUN":
 			// Merge consecutive RUN instructions
 			cmd := optimizeRunInstruction(inst.Args)
@@ -178,6 +200,19 @@ func optimizeBaseImage(current string, opts RewriteOptions) string {
 		return opts.BaseImage
 	}
 
+	// Suggest distroless for compiled ecosystems
+	if opts.Ecosystems != nil {
+		if opts.Ecosystems.HasEcosystem(ecosystem.Go) {
+			return "gcr.io/distroless/static-debian12"
+		}
+		if opts.Ecosystems.HasEcosystem(ecosystem.Rust) {
+			return "gcr.io/distroless/cc-debian12"
+		}
+		if opts.Ecosystems.HasEcosystem(ecosystem.Java) {
+			return "gcr.io/distroless/java21-debian12"
+		}
+	}
+
 	lower := strings.ToLower(current)
 
 	// Already optimized
@@ -190,7 +225,6 @@ func optimizeBaseImage(current string, opts RewriteOptions) string {
 	case strings.HasPrefix(lower, "node:"):
 		parts := strings.SplitN(current, ":", 2)
 		version := parts[1]
-		// Remove any existing tags
 		version = strings.Split(version, "-")[0]
 		return fmt.Sprintf("node:%s-alpine", version)
 	case strings.HasPrefix(lower, "python:"):
@@ -210,6 +244,11 @@ func optimizeBaseImage(current string, opts RewriteOptions) string {
 		return fmt.Sprintf("ruby:%s-slim", version)
 	case strings.HasPrefix(lower, "openjdk:") || strings.HasPrefix(lower, "eclipse-temurin:"):
 		return current + "-alpine"
+	case strings.HasPrefix(lower, "php:"):
+		parts := strings.SplitN(current, ":", 2)
+		version := parts[1]
+		version = strings.Split(version, "-")[0]
+		return fmt.Sprintf("php:%s-fpm-alpine", version)
 	default:
 		return current
 	}
@@ -221,28 +260,44 @@ func writeNodeBuildStage(b *strings.Builder, df *Dockerfile) {
 	b.WriteString("# Copy dependency manifests first for better caching\n")
 	b.WriteString("COPY package*.json ./\n")
 
-	// Check if yarn is used
+	// Detect package manager from original Dockerfile or lock files
 	hasYarn := false
+	hasPnpm := false
+	hasBun := false
 	for _, inst := range df.Instructions {
+		if strings.Contains(inst.Args, "pnpm") {
+			hasPnpm = true
+			break
+		}
+		if strings.Contains(inst.Args, "bun ") {
+			hasBun = true
+			break
+		}
 		if strings.Contains(inst.Args, "yarn") {
 			hasYarn = true
-			break
 		}
 	}
 
-	if hasYarn {
+	switch {
+	case hasPnpm:
+		b.WriteString("COPY pnpm-lock.yaml* ./\n")
+		b.WriteString("RUN corepack enable && pnpm install --frozen-lockfile --prod\n\n")
+	case hasBun:
+		b.WriteString("COPY bun.lock* bun.lockb* ./\n")
+		b.WriteString("RUN bun install --frozen-lockfile\n\n")
+	case hasYarn:
 		b.WriteString("COPY yarn.lock* ./\n")
 		b.WriteString("RUN yarn install --frozen-lockfile\n\n")
-	} else {
+	default:
 		b.WriteString("RUN npm ci --only=production\n\n")
 	}
 
 	b.WriteString("# Copy source and build\n")
-	b.WriteString("COPY . .\n")
+	b.WriteString("COPY --chown=node:node . .\n")
 
 	// Find build command from original Dockerfile
 	for _, inst := range df.Instructions {
-		if inst.Command == "RUN" && (strings.Contains(inst.Args, "npm run build") || strings.Contains(inst.Args, "yarn build")) {
+		if inst.Command == "RUN" && (strings.Contains(inst.Args, "npm run build") || strings.Contains(inst.Args, "yarn build") || strings.Contains(inst.Args, "pnpm build") || strings.Contains(inst.Args, "bun run build")) {
 			b.WriteString(fmt.Sprintf("RUN %s\n", inst.Args))
 			break
 		}
@@ -250,10 +305,12 @@ func writeNodeBuildStage(b *strings.Builder, df *Dockerfile) {
 }
 
 func writeNodeProdStage(b *strings.Builder) {
+	b.WriteString("# Run as non-root user\n")
+	b.WriteString("USER node\n\n")
 	b.WriteString("# Copy only production dependencies and built artifacts\n")
-	b.WriteString("COPY --from=builder /app/package*.json ./\n")
+	b.WriteString("COPY --from=builder --chown=node:node /app/package*.json ./\n")
 	b.WriteString("RUN npm ci --only=production && npm cache clean --force\n\n")
-	b.WriteString("COPY --from=builder /app/dist ./dist\n\n")
+	b.WriteString("COPY --from=builder --chown=node:node /app/dist ./dist\n\n")
 }
 
 func writeGoBuildStage(b *strings.Builder, df *Dockerfile) {
@@ -268,6 +325,8 @@ func writeGoBuildStage(b *strings.Builder, df *Dockerfile) {
 func writeGoProdStage(b *strings.Builder) {
 	b.WriteString("# Copy only the compiled binary\n")
 	b.WriteString("COPY --from=builder /app/server /app/server\n\n")
+	b.WriteString("# Run as nonroot (distroless nonroot UID)\n")
+	b.WriteString("USER nonroot:nonroot\n\n")
 }
 
 func writePythonBuildStage(b *strings.Builder, df *Dockerfile) {
@@ -297,20 +356,88 @@ func writeRustBuildStage(b *strings.Builder, df *Dockerfile) {
 func writeRustProdStage(b *strings.Builder) {
 	b.WriteString("# Copy only the compiled binary\n")
 	b.WriteString("COPY --from=builder /app/target/release/app /usr/local/bin/app\n\n")
+	b.WriteString("# Run as nonroot\n")
+	b.WriteString("USER nonroot:nonroot\n\n")
 }
 
 func writeJavaBuildStage(b *strings.Builder, df *Dockerfile) {
-	b.WriteString("# Copy build files\n")
-	b.WriteString("COPY pom.xml ./\n")
-	b.WriteString("RUN mvn dependency:go-offline\n\n")
-	b.WriteString("# Copy source and build\n")
-	b.WriteString("COPY . .\n")
-	b.WriteString("RUN mvn package -DskipTests\n")
+	// Detect Gradle vs Maven from original Dockerfile
+	usesGradle := false
+	for _, inst := range df.Instructions {
+		if strings.Contains(inst.Args, "gradle") || strings.Contains(inst.Args, "gradlew") {
+			usesGradle = true
+			break
+		}
+	}
+
+	if usesGradle {
+		b.WriteString("# Copy Gradle build files\n")
+		b.WriteString("COPY build.gradle* settings.gradle* gradlew ./\n")
+		b.WriteString("COPY gradle ./gradle\n")
+		b.WriteString("RUN ./gradlew dependencies --no-daemon\n\n")
+		b.WriteString("# Copy source and build\n")
+		b.WriteString("COPY . .\n")
+		b.WriteString("RUN ./gradlew bootJar --no-daemon -x test\n")
+	} else {
+		b.WriteString("# Copy Maven build files\n")
+		b.WriteString("COPY pom.xml ./\n")
+		b.WriteString("RUN mvn dependency:go-offline -B\n\n")
+		b.WriteString("# Copy source and build\n")
+		b.WriteString("COPY . .\n")
+		b.WriteString("RUN mvn package -DskipTests -B\n")
+	}
 }
 
 func writeJavaProdStage(b *strings.Builder) {
 	b.WriteString("# Copy only the built JAR\n")
 	b.WriteString("COPY --from=builder /app/target/*.jar /app/app.jar\n\n")
+	b.WriteString("USER nonroot:nonroot\n\n")
+}
+
+func writePHPBuildStage(b *strings.Builder, df *Dockerfile) {
+	b.WriteString("# Copy composer files first for dependency caching\n")
+	b.WriteString("COPY composer.json composer.lock ./\n")
+	b.WriteString("RUN composer install --no-dev --no-scripts --prefer-dist --optimize-autoloader\n\n")
+	b.WriteString("# Copy source\n")
+	b.WriteString("COPY . .\n")
+	b.WriteString("RUN composer dump-autoload --optimize\n")
+}
+
+func writePHPProdStage(b *strings.Builder) {
+	b.WriteString("# Copy application with optimized autoloader\n")
+	b.WriteString("COPY --from=builder /app /app\n\n")
+}
+
+func writeElixirBuildStage(b *strings.Builder, df *Dockerfile) {
+	b.WriteString("# Set build env\n")
+	b.WriteString("ENV MIX_ENV=prod\n\n")
+	b.WriteString("# Copy mix files first for caching\n")
+	b.WriteString("COPY mix.exs mix.lock ./\n")
+	b.WriteString("RUN mix deps.get --only prod\n\n")
+	b.WriteString("# Copy source and compile\n")
+	b.WriteString("COPY . .\n")
+	b.WriteString("RUN mix compile && mix release\n")
+}
+
+func writeElixirProdStage(b *strings.Builder) {
+	b.WriteString("# Copy the release\n")
+	b.WriteString("COPY --from=builder /app/_build/prod/rel/app ./\n\n")
+	b.WriteString("ENV LANG=C.UTF-8\n\n")
+}
+
+func writeDotNetBuildStage(b *strings.Builder, df *Dockerfile) {
+	b.WriteString("# Restore dependencies first for caching\n")
+	b.WriteString("COPY *.csproj ./\n")
+	b.WriteString("RUN dotnet restore\n\n")
+	b.WriteString("# Copy source and publish\n")
+	b.WriteString("COPY . .\n")
+	b.WriteString("RUN dotnet publish -c Release -o /app/publish --no-restore\n")
+}
+
+func writeDotNetProdStage(b *strings.Builder) {
+	b.WriteString("# Copy published output\n")
+	b.WriteString("COPY --from=builder /app/publish /app\n\n")
+	b.WriteString("ENTRYPOINT [\"dotnet\", \"app.dll\"]\n")
 }
 
 func writeGenericBuildStage(b *strings.Builder, df *Dockerfile) {
