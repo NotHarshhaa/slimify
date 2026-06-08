@@ -1,0 +1,38 @@
+# Binaries
+/slimify
+/slimify.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go build & test
+*.test
+*.out
+coverage.out
+vendor/
+
+# Local manual test harness (docker fixtures, bloat files, generated output)
+testdata/
+
+# slimify fix output
+slimify-out/
+**/Dockerfile.slimified
+**/Dockerfile.slim
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env & secrets
+.env
+.env.*
+!.env.example

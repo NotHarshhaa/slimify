@@ -78,9 +78,22 @@ brews:
       system "#{bin}/slimify", "--version"
 
 dockers:
+  # ── GitHub Container Registry ──────────────────────────────────────────────
   - image_templates:
       - "ghcr.io/notharshhaa/slimify:{{ .Version }}"
       - "ghcr.io/notharshhaa/slimify:latest"
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.title=slimify"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source=https://github.com/NotHarshhaa/slimify"
+      - "--label=org.opencontainers.image.licenses=MIT"
+
+  # ── Docker Hub ─────────────────────────────────────────────────────────────
+  - image_templates:
+      - "docker.io/harshhaareddy/slimify:{{ .Version }}"
+      - "docker.io/harshhaareddy/slimify:latest"
     dockerfile: Dockerfile
     build_flag_templates:
       - "--pull"
