@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"archive/tar"
+	"fmt"
 	"io"
 )
 
@@ -101,44 +102,10 @@ func formatSize(bytes int64) string {
 }
 
 // formatFloat formats a float with appropriate precision.
+// Values >= 100 are shown with no decimal places; smaller values get one decimal.
 func formatFloat(f float64) string {
 	if f >= 100 {
-		return java_fmt(f, 0)
+		return fmt.Sprintf("%.0f", f)
 	}
-	if f >= 10 {
-		return java_fmt(f, 1)
-	}
-	return java_fmt(f, 1)
-}
-
-func java_fmt(f float64, prec int) string {
-	if prec == 0 {
-		return fmtInt(int64(f))
-	}
-	s := fmtInt(int64(f))
-	frac := int64((f - float64(int64(f))) * 10)
-	if frac < 0 {
-		frac = -frac
-	}
-	return s + "." + fmtInt(frac)
-}
-
-func fmtInt(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	var digits []byte
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	if neg {
-		digits = append([]byte{'-'}, digits...)
-	}
-	return string(digits)
+	return fmt.Sprintf("%.1f", f)
 }

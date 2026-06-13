@@ -173,7 +173,8 @@ $ slimify audit myapp:latest
 | `--top N` | `10` | Show top N largest files per layer |
 | `--threshold MB` | `1.0` | Only flag files larger than N MB |
 | `--no-secrets` | `false` | Skip scanning for secret files in layers |
-| `--exit-code` | `false` | Exit with code 1 if potential savings exceed threshold (CI gate) |
+| `--exit-code` | `false` | Exit with code 1 if potential savings exceed `--min-savings` (CI gate) |
+| `--min-savings MB` | `100` | Savings threshold (MB) that triggers exit code 1 when `--exit-code` is set |
 
 ---
 
@@ -343,8 +344,8 @@ You can also use any [cosmiconfig](https://github.com/davidtheclark/cosmiconfig)
 ### Shell (any CI)
 
 ```bash
-# Native exit-code gate — no jq needed
-slimify audit myapp:latest --exit-code --threshold 100
+# Native exit-code gate — fail if > 100 MB of savings detected
+slimify audit myapp:latest --exit-code --min-savings 100
 
 # Or parse JSON output manually
 slimify audit myapp:latest --json | jq -e '.savings_mb < 100'

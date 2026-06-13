@@ -66,17 +66,17 @@ func writeMultiStageRewrite(b *strings.Builder, df *Dockerfile, base string, opt
 		} else if opts.Ecosystems.HasEcosystem(ecosystem.Go) {
 			writeGoBuildStage(b, df)
 		} else if opts.Ecosystems.HasEcosystem(ecosystem.Python) {
-			writePythonBuildStage(b, df)
+			writePythonBuildStage(b)
 		} else if opts.Ecosystems.HasEcosystem(ecosystem.Rust) {
-			writeRustBuildStage(b, df)
+			writeRustBuildStage(b)
 		} else if opts.Ecosystems.HasEcosystem(ecosystem.Java) {
 			writeJavaBuildStage(b, df)
 		} else if opts.Ecosystems.HasEcosystem(ecosystem.PHP) {
-			writePHPBuildStage(b, df)
+			writePHPBuildStage(b)
 		} else if opts.Ecosystems.HasEcosystem(ecosystem.Elixir) {
-			writeElixirBuildStage(b, df)
+			writeElixirBuildStage(b)
 		} else if opts.Ecosystems.HasEcosystem(ecosystem.DotNet) {
-			writeDotNetBuildStage(b, df)
+			writeDotNetBuildStage(b)
 		} else {
 			writeGenericBuildStage(b, df)
 		}
@@ -289,6 +289,8 @@ func writeNodeBuildStage(b *strings.Builder, df *Dockerfile) {
 		b.WriteString("COPY yarn.lock* ./\n")
 		b.WriteString("RUN yarn install --frozen-lockfile\n\n")
 	default:
+		// Copy lock file so node_modules layer is cached until lock changes
+		b.WriteString("COPY package-lock.json* ./\n")
 		b.WriteString("RUN npm ci --only=production\n\n")
 	}
 
@@ -313,7 +315,7 @@ func writeNodeProdStage(b *strings.Builder) {
 	b.WriteString("COPY --from=builder --chown=node:node /app/dist ./dist\n\n")
 }
 
-func writeGoBuildStage(b *strings.Builder, df *Dockerfile) {
+func writeGoBuildStage(b *strings.Builder, _ *Dockerfile) {
 	b.WriteString("# Copy go module files first for caching\n")
 	b.WriteString("COPY go.mod go.sum ./\n")
 	b.WriteString("RUN go mod download\n\n")
@@ -329,7 +331,7 @@ func writeGoProdStage(b *strings.Builder) {
 	b.WriteString("USER nonroot:nonroot\n\n")
 }
 
-func writePythonBuildStage(b *strings.Builder, df *Dockerfile) {
+func writePythonBuildStage(b *strings.Builder) {
 	b.WriteString("# Copy requirements first for caching\n")
 	b.WriteString("COPY requirements*.txt ./\n")
 	b.WriteString("RUN pip install --no-cache-dir --prefix=/install -r requirements.txt\n\n")
@@ -343,7 +345,7 @@ func writePythonProdStage(b *strings.Builder) {
 	b.WriteString("COPY --from=builder /app .\n\n")
 }
 
-func writeRustBuildStage(b *strings.Builder, df *Dockerfile) {
+func writeRustBuildStage(b *strings.Builder) {
 	b.WriteString("# Copy manifests\n")
 	b.WriteString("COPY Cargo.toml Cargo.lock ./\n")
 	b.WriteString("RUN mkdir src && echo 'fn main() {}' > src/main.rs\n")
@@ -394,7 +396,7 @@ func writeJavaProdStage(b *strings.Builder) {
 	b.WriteString("USER nonroot:nonroot\n\n")
 }
 
-func writePHPBuildStage(b *strings.Builder, df *Dockerfile) {
+func writePHPBuildStage(b *strings.Builder) {
 	b.WriteString("# Copy composer files first for dependency caching\n")
 	b.WriteString("COPY composer.json composer.lock ./\n")
 	b.WriteString("RUN composer install --no-dev --no-scripts --prefer-dist --optimize-autoloader\n\n")
@@ -408,7 +410,7 @@ func writePHPProdStage(b *strings.Builder) {
 	b.WriteString("COPY --from=builder /app /app\n\n")
 }
 
-func writeElixirBuildStage(b *strings.Builder, df *Dockerfile) {
+func writeElixirBuildStage(b *strings.Builder) {
 	b.WriteString("# Set build env\n")
 	b.WriteString("ENV MIX_ENV=prod\n\n")
 	b.WriteString("# Copy mix files first for caching\n")
@@ -425,7 +427,7 @@ func writeElixirProdStage(b *strings.Builder) {
 	b.WriteString("ENV LANG=C.UTF-8\n\n")
 }
 
-func writeDotNetBuildStage(b *strings.Builder, df *Dockerfile) {
+func writeDotNetBuildStage(b *strings.Builder) {
 	b.WriteString("# Restore dependencies first for caching\n")
 	b.WriteString("COPY *.csproj ./\n")
 	b.WriteString("RUN dotnet restore\n\n")

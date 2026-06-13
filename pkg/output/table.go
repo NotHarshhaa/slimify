@@ -218,9 +218,14 @@ func PrintFixSummary(outputDir string, ignoreSaved int64, originalSize int64, ha
 
 	fmt.Println()
 	fmt.Printf("  Output written to %s/\n", outputDir)
-	fmt.Println("    ├── Dockerfile.slimified")
-	fmt.Println("    ├── .dockerignore")
-	fmt.Println("    └── slimify.yaml")
+	if hasDockerfile {
+		fmt.Println("    ├── Dockerfile.slimified")
+		fmt.Println("    ├── .dockerignore")
+		fmt.Println("    └── slimify.yaml")
+	} else {
+		fmt.Println("    ├── .dockerignore")
+		fmt.Println("    └── slimify.yaml")
+	}
 	fmt.Println()
 }
 

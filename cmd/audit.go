@@ -11,11 +11,12 @@ import (
 )
 
 var (
-	auditRemote    bool
-	auditTop       int
-	auditThreshold float64
-	auditNoSecrets bool
-	auditExitCode  bool
+	auditRemote      bool
+	auditTop         int
+	auditThreshold   float64
+	auditNoSecrets   bool
+	auditExitCode    bool
+	auditMinSavings  float64
 )
 
 var auditCmd = &cobra.Command{
@@ -44,7 +45,8 @@ func init() {
 	auditCmd.Flags().IntVar(&auditTop, "top", 10, "show top N largest files per layer")
 	auditCmd.Flags().Float64Var(&auditThreshold, "threshold", 1.0, "only flag files larger than N MB")
 	auditCmd.Flags().BoolVar(&auditNoSecrets, "no-secrets", false, "skip scanning for secret files in layers")
-	auditCmd.Flags().BoolVar(&auditExitCode, "exit-code", false, "exit with code 1 if potential savings exceed threshold (useful for CI)")
+	auditCmd.Flags().BoolVar(&auditExitCode, "exit-code", false, "exit with code 1 if potential savings exceed --min-savings (useful for CI)")
+	auditCmd.Flags().Float64Var(&auditMinSavings, "min-savings", 100, "MB of potential savings that triggers exit code 1 when --exit-code is set")
 
 	rootCmd.AddCommand(auditCmd)
 }
@@ -69,8 +71,8 @@ func runAudit(cmd *cobra.Command, args []string) error {
 
 	output.PrintAuditReport(report, quiet)
 
-	// --exit-code: exit 1 when there are significant savings (without corrupting JSON output)
-	if auditExitCode && report.SavingsMB > auditThreshold {
+	// --exit-code: exit 1 when savings exceed --min-savings (without corrupting JSON output)
+	if auditExitCode && report.SavingsMB > auditMinSavings {
 		os.Exit(1)
 	}
 

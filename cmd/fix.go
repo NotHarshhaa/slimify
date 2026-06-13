@@ -96,7 +96,7 @@ func runFix(cmd *cobra.Command, args []string) error {
 	}
 
 	// Generate slimify.yaml config
-	configContent := generateSlimifyConfig(cfg, report)
+	configContent := generateSlimifyConfig(cfg)
 
 	// Output
 	if fixDryRun {
@@ -157,14 +157,14 @@ func runFix(cmd *cobra.Command, args []string) error {
 }
 
 // generateSlimifyConfig creates a slimify.yaml config from current settings.
-func generateSlimifyConfig(cfg *config.Config, report *analyzer.AuditReport) string {
+func generateSlimifyConfig(cfg *config.Config) string {
 	out := map[string]interface{}{
 		"ignore": map[string]interface{}{
 			"whitelist": cfg.Ignore.Whitelist,
 			"blacklist": cfg.Ignore.Blacklist,
 		},
 		"audit": map[string]interface{}{
-			"threshold_mb":       cfg.Audit.ThresholdMB,
+			"threshold_mb":        cfg.Audit.ThresholdMB,
 			"top_files_per_layer": cfg.Audit.TopFilesPerLayer,
 		},
 		"fix": map[string]interface{}{

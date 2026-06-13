@@ -123,8 +123,6 @@ func runIgnore(cmd *cobra.Command, args []string) error {
 func scanDirectory(dir string) ([]string, error) {
 	var files []string
 
-	baseDepth := strings.Count(filepath.ToSlash(dir), "/")
-
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
@@ -135,10 +133,17 @@ func scanDirectory(dir string) ([]string, error) {
 			return filepath.SkipDir
 		}
 
-		// Enforce depth limit
-		currentDepth := strings.Count(filepath.ToSlash(path), "/")
-		if d.IsDir() && currentDepth-baseDepth >= maxScanDepth {
-			return filepath.SkipDir
+		// Enforce depth limit using filepath.Rel for cross-platform accuracy
+		if d.IsDir() && path != dir {
+			rel, err := filepath.Rel(dir, path)
+			if err != nil {
+				return filepath.SkipDir
+			}
+			// Count path separators to get depth
+			depth := strings.Count(rel, string(filepath.Separator)) + 1
+			if depth > maxScanDepth {
+				return filepath.SkipDir
+			}
 		}
 
 		if !d.IsDir() {

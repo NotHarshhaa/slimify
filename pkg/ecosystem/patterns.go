@@ -23,7 +23,6 @@ var UniversalBloatPatterns = []BloatPattern{
 	{Pattern: ".idea/", Description: "JetBrains IDE settings"},
 	{Pattern: ".editorconfig", Description: "Editor config"},
 	{Pattern: "*.md", Description: "Markdown docs"},
-	{Pattern: "*.txt", Description: "Text files (README, CHANGELOG, etc.)"},
 	{Pattern: "LICENSE*", Description: "License files"},
 	{Pattern: "CHANGELOG*", Description: "Changelog files"},
 	{Pattern: "CONTRIBUTING*", Description: "Contribution guidelines"},
